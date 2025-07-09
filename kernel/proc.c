@@ -303,6 +303,8 @@ fork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->trace_mask = p->trace_mask;// 子进程继承父进程的trace_mark
+
   pid = np->pid;
 
   release(&np->lock);
@@ -653,4 +655,15 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64
+count_process(void) {
+  uint64 cnt = 0;
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    if(p->state != UNUSED) { // 不是 UNUSED 的进程位，就是已经分配的
+        cnt++;
+    }
+  }
+  return cnt;
 }
