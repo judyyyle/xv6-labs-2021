@@ -1,0 +1,10 @@
+Speed up system calls
+Question: Which other xv6 system call(s) could be made faster using this shared page? Explain how.
+Answer: 父进程的进程号通常不会发生频繁变化，因此可以在进程的共享页中预存储父进程的 PID，用户态直接读取该共享页，避免每次调用 getppid() 时都进入内核获取父进程的 PID。这样一来，就能大幅降低系统调用的开销，提升效率。
+
+Print a page table
+Question: Explain the output of vmprint in terms of Fig 3-4 from the text. What does page 0 contain? What is in page 2? When running in user mode, could the process read/write the memory mapped by page 1? What does the third to last page contain?
+Answer: page 0：第 0 页通常是用来存放trapframe的内存页。trapframe 是一个结构体，用来保存进程在发生中断或系统调用时的 CPU 寄存器状态，包括程序计数器（sepc）、堆栈指针（sp）等。这页内存被映射到用户进程在进行上下文切换时需要保存的状态，尤其是在从用户模式切换到内核模式，或者从内核模式返回到用户模式时使用。
+page 2: 第 2 页可能包含堆栈或堆的某部分，这取决于进程的内存布局。在 xv6 中，进程的堆栈通常从较高的虚拟地址开始向低地址扩展，而堆从低地址向高地址扩展。因此，页面 2 很有可能是用户程序的堆栈或堆的一部分，用于存放局部变量、函数调用信息等。
+第 1 页的内存访问权限：在用户模式下，进程不能读写第 1 页的内存，因为该页通常包含内核空间的代码或数据（如系统调用的跳转地址、内核的 trampoline 代码等）。在 xv6 中，第 1 页用于处理从用户模式到内核模式的跳转，属于只读的保护页。只有内核能够访问这些区域，用户模式的程序是无法访问的。
+倒数第三页的内容：倒数第三页通常是用户程序的堆或堆栈中的一个页面，具体内容依赖于进程在运行时的内存分配情况。如果该页位于堆栈区域，它可能存放函数的返回地址、局部变量等。如果位于堆区，它可能存放动态分配的内存（如通过 malloc 获取的内存）。具体来说，这一页的内容会随着程序的执行和内存分配策略的不同而变化。
