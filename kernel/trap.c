@@ -104,25 +104,22 @@ cowhandler(pagetable_t pagetable, uint64 va)
     pte_t *pte = walk(pagetable, va, 0);
     if (pte == 0)
       return -1;
-    // check the PTE
+    // 检查 PTE
     if ((*pte & PTE_COW) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
       return -1;
     }
     if ((mem = kalloc()) == 0) {
       return -1;
     }
-    // old physical address
+    // 分配新页并复制旧数据
     uint64 pa = PTE2PA(*pte);
-    // copy old data to new mem
     memmove((char*)mem, (char*)pa, PGSIZE);
-    // PAY ATTENTION
-    // decrease the reference count of old memory page, because a new page has been allocated
+    // 减少原物理页的引用计数
     kfree((void*)pa);
-    uint flags = PTE_FLAGS(*pte);
-    // set PTE_W to 1, change the address pointed to by PTE to new memory page(mem)
-    *pte = (PA2PTE(mem) | flags | PTE_W);
-    // set PTE_COW to 0
-    *pte &= ~PTE_COW;
+    // 更新页表项
+    uint flags = PTE_FLAGS(*pte); 
+    *pte = (PA2PTE(mem) | flags | PTE_W); // 设置为可写
+    *pte &= ~PTE_COW; // 清除 COW 标志
     return 0;
 }
 

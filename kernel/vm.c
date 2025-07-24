@@ -353,10 +353,11 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+// 检查是否是 COW 页
 int checkcowpage(uint64 va, pte_t *pte, struct proc* p) {
-  return (va < p->sz) // va should blow the size of process memory (bytes)
+  return (va < p->sz) 
     && (*pte & PTE_V) 
-    && (*pte & PTE_COW); // pte is COW page
+    && (*pte & PTE_COW);
 }
 
 // Copy from kernel to user.
@@ -377,26 +378,18 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     pte_t *pte = walk(pagetable, va0, 0);
     if (*pte == 0)
       p->killed = 1;
-    // check
+    // 检查 COW 页
     if (checkcowpage(va0, pte, p)) 
     {
       char *mem;
       if ((mem = kalloc()) == 0) {
-        // kill the process
         p->killed = 1;
       }else {
         memmove(mem, (char*)pa0, PGSIZE);
-        // PAY ATTENTION!!!
-        // This statement must be above the next statement
         uint flags = PTE_FLAGS(*pte);
-        // decrease the reference count of old memory that va0 point
-        // and set pte to 0
         uvmunmap(pagetable, va0, 1, 1);
-        // change the physical memory address and set PTE_W to 1
         *pte = (PA2PTE(mem) | flags | PTE_W);
-        // set PTE_COW to 0
         *pte &= ~PTE_COW;
-        // update pa0 to new physical memory address
         pa0 = (uint64)mem;
       }
     }
