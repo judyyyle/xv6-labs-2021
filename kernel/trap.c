@@ -5,10 +5,12 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+pte_t* walk(pagetable_t pagetable, uint64 va, int alloc);
 
 struct spinlock tickslock;
 uint ticks;
-
+int
+cowhandler(pagetable_t pagetable, uint64 va);
 extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
@@ -65,6 +67,14 @@ usertrap(void)
     intr_on();
 
     syscall();
+  }
+  else if (r_scause() == 15) {
+    uint64 va = r_stval();
+    if (va >= p->sz) // 如果内存不足，则杀死进程
+      p->killed = 1;
+    int ret = cowhandler(p->pagetable, va);
+    if (ret != 0)
+      p->killed = 1;
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -77,10 +87,43 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
     yield();
+  }
+    
 
   usertrapret();
+}
+
+int
+cowhandler(pagetable_t pagetable, uint64 va)
+{
+    char *mem;
+    if (va >= MAXVA)
+      return -1;
+    pte_t *pte = walk(pagetable, va, 0);
+    if (pte == 0)
+      return -1;
+    // check the PTE
+    if ((*pte & PTE_COW) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
+      return -1;
+    }
+    if ((mem = kalloc()) == 0) {
+      return -1;
+    }
+    // old physical address
+    uint64 pa = PTE2PA(*pte);
+    // copy old data to new mem
+    memmove((char*)mem, (char*)pa, PGSIZE);
+    // PAY ATTENTION
+    // decrease the reference count of old memory page, because a new page has been allocated
+    kfree((void*)pa);
+    uint flags = PTE_FLAGS(*pte);
+    // set PTE_W to 1, change the address pointed to by PTE to new memory page(mem)
+    *pte = (PA2PTE(mem) | flags | PTE_W);
+    // set PTE_COW to 0
+    *pte &= ~PTE_COW;
+    return 0;
 }
 
 //
