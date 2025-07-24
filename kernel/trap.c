@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "defs.h"
 
+int uvmcheckcowpage(uint64 va);  // 声明 uvmcheckcowpage 函数
+int uvmcowcopy(uint64 va);       // 声明 uvmcowcopy 函数
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -67,6 +70,10 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if((r_scause() == 13 || r_scause() == 15) && uvmcheckcowpage(r_stval())) { // copy-on-write
+    if(uvmcowcopy(r_stval()) == -1){ // 如果内存不足，则杀死进程
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -77,8 +84,21 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    if (p->alarm_interval > 0 && p->handling_alarm == 0) {
+      if (--p->ticks_left == 0) {
+        // 保存 trapframe 以便 sigreturn 使用
+        p->ticks_left = p->alarm_interval;
+        p->alarm_tf_backup = *(p->trapframe); // 深拷贝备份
+        p->handling_alarm = 1;
+
+        // 修改 epc，跳转到 handler
+        p->trapframe->epc = p->alarm_handler;
+      }
+    }
     yield();
+  }
+    
 
   usertrapret();
 }

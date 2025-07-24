@@ -132,3 +132,12 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace(void) {
+  uint64 fp = r_fp(); // 当前帧指针
+  while(fp != PGROUNDUP(fp)) { // 如果已经到达栈底
+    uint64 ra = *(uint64*)(fp - 8); // 打印ra
+    printf("%p\n", ra);
+    fp = *(uint64*)(fp - 16); // 前一个指针
+  }
+}
