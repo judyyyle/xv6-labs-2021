@@ -1,0 +1,8 @@
+Question: Why are there missing keys with 2 threads, but not with 1 thread? Identify a sequence of events with 2 threads that can lead to a key being missing.
+Answer: 下面是一个可能导致缺失键的事件序列：
+线程1执行put()操作，将键值对(key1, value1)插入哈希表。
+线程2同时执行put()操作，将键值对(key2, value2)插入哈希表。
+线程1修改哈希表中的链表，在插入(key1, value1)时，执行链表的插入操作。
+线程2在此时也开始修改同一个哈希桶中的链表，在插入(key2, value2)时，也修改了该链表。
+线程1完成了自己的操作并退出，而线程2则在put()操作完成之前，未能正确处理key1，覆盖了哈希桶中的数据。
+由于在没有锁机制的保护下，两个线程同时访问并修改同一哈希桶，导致一个键（如key1）在插入过程中丢失。
