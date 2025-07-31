@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -183,6 +188,43 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       kfree((void*)pa);
     }
     *pte = 0;
+  }
+}
+
+void
+vmaunmap(pagetable_t pagetable, uint64 va, uint64 nbytes, struct vma *v)
+{
+  uint64 a;
+  pte_t *pte;
+
+  // printf("unmapping %d bytes from %p\n",nbytes, va);
+
+  // borrowed from "uvmunmap"
+  for(a = va; a < va + nbytes; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("sys_munmap: walk");
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("sys_munmap: not a leaf");
+    if(*pte & PTE_V){
+      uint64 pa = PTE2PA(*pte);
+      if((*pte & PTE_D) && (v->flags & MAP_SHARED)) {
+        // 如果该页被修改过（dirty）且是共享映射（MAP_SHARED），需要将数据写回文件
+        begin_op();
+        ilock(v->f->ip);
+        uint64 aoff = a - v->vastart; // 计算虚拟地址a相对于映射起始地址vastart的偏移
+        if(aoff < 0) { // 映射起始地址非页对齐，处理第一页的前缀部分
+          writei(v->f->ip, 0, pa + (-aoff), v->offset, PGSIZE + aoff);
+        } else if(aoff + PGSIZE > v->sz){  // 映射的最后一页不是满页
+          writei(v->f->ip, 0, pa, v->offset + aoff, v->sz - aoff);
+        } else { // 正常的4KB整页写回
+          writei(v->f->ip, 0, pa, v->offset + aoff, PGSIZE);
+        }
+        iunlock(v->f->ip);
+        end_op();
+      }
+      kfree((void*)pa);
+      *pte = 0;
+    }
   }
 }
 

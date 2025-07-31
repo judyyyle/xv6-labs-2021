@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -483,4 +484,148 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr, sz, offset;
+  int prot, flags, fd; struct file *f;
+  // 解析用户传入的参数
+  if(argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || argint(2, &prot) < 0
+    || argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argaddr(5, &offset) < 0 || sz == 0)
+    return -1;
+  
+  if((!f->readable && (prot & (PROT_READ)))
+     || (!f->writable && (prot & PROT_WRITE) && !(flags & MAP_PRIVATE)))
+    return -1;
+  
+  sz = PGROUNDUP(sz);
+  struct proc *p = myproc();
+  struct vma *v = 0;
+  uint64 vaend = TRAPFRAME;// 虚拟地址起点，从trapframe开始向下分配区域（高地址往低地址）
+
+  // 遍历进程的VMA表，找到一个空闲VMA项，同时更新vaend为已有VMA项最低起始地址
+  for(int i=0;i<NVMA;i++) {
+    struct vma *vv = &p->vmas[i];
+    if(vv->valid == 0) {
+      if(v == 0) {
+        v = &p->vmas[i];
+        // found free vma;
+        v->valid = 1;
+      }
+    } else if(vv->vastart < vaend) {
+      // 更新vaend，避免分配地址与已有VMA重叠
+      vaend = PGROUNDDOWN(vv->vastart);
+    }
+  }
+  if(v == 0){
+    panic("mmap: no free vma");
+  }
+  // 设置当前 VMA 的映射信息
+  v->vastart = vaend - sz;
+  v->sz = sz;
+  v->prot = prot;
+  v->flags = flags;
+  v->f = f;
+  v->offset = offset;
+
+  filedup(v->f);  // 增加文件引用计数，防止在映射期间文件被关闭
+  return v->vastart;
+}
+
+// 查找包含某个虚拟地址va的VMA区间
+struct vma *findvma(struct proc *p, uint64 va) {
+  for(int i=0;i<NVMA;i++) {
+    struct vma *vv = &p->vmas[i];
+    if(vv->valid == 1 && va >= vv->vastart && va < vv->vastart + vv->sz) {
+      return vv;
+    }
+  }
+  return 0;
+}
+
+// 检查某个虚拟地址是否需要进行mmap延迟加载页，如果是，则分配物理页并从文件中读取数据进行填充
+int vmatrylazytouch(uint64 va) {
+  struct proc *p = myproc();
+
+  // 查找va所在的VMA，如果不存在则说明不是mmap区域，返回 0
+  struct vma *v = findvma(p, va);
+  if(v == 0) {
+    return 0;
+  }
+
+  // 分配一个物理页用来映射该虚拟地址
+  void *pa = kalloc();
+  if(pa == 0) {
+    panic("vmalazytouch: kalloc");
+  }
+  memset(pa, 0, PGSIZE);
+  
+  // 从映射的文件中读取数据填入该页
+  begin_op();
+  ilock(v->f->ip);
+  readi(v->f->ip, 0, (uint64)pa, v->offset + PGROUNDDOWN(va - v->vastart), PGSIZE);
+  iunlock(v->f->ip);
+  end_op();
+
+  // 设置页表项的权限（根据 vma->prot）
+  int perm = PTE_U;
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W;
+  if(v->prot & PROT_EXEC)
+    perm |= PTE_X;
+
+  // 将该物理页映射到当前进程页表的指定虚拟地址
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, PTE_R | PTE_W | PTE_U) < 0) {
+    panic("vmalazytouch: mappages");
+  }
+
+  return 1;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr, sz;
+  if(argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || sz == 0)
+    return -1;
+    
+  struct proc *p = myproc();
+  // 查找当前进程中包含该虚拟地址 addr 的 vma。
+  struct vma *v = findvma(p, addr);
+  if(v == 0) {
+    return -1;
+  }
+  if(addr > v->vastart && addr + sz < v->vastart + v->sz) {
+    return -1;
+  }
+
+  // 计算要解除映射的实际起始地址，需要页对齐。
+  uint64 addr_aligned = addr;
+  if(addr > v->vastart) {
+    addr_aligned = PGROUNDUP(addr);
+  }
+
+  // 计算解除映射的字节数（nunmap）
+  int nunmap = sz - (addr_aligned-addr);
+  if(nunmap < 0)
+    nunmap = 0;
+  // 调用自定义函数vmaunmap，取消页表中addr_aligned起nunmap字节的映射
+  vmaunmap(p->pagetable, addr_aligned, nunmap, v); 
+  // 若解除的是从头部开始的一段映射，需要调整vma的起始地址和文件偏移量
+  if(addr <= v->vastart && addr + sz > v->vastart) {
+    v->offset += addr + sz - v->vastart;
+    v->vastart = addr + sz;
+  }
+  v->sz -= sz;
+  if(v->sz <= 0) {
+    fileclose(v->f);
+    v->valid = 0;
+  }
+
+  return 0;  
 }
